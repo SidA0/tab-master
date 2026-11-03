@@ -1,0 +1,12 @@
+import {readFileSync} from 'node:fs';
+import {analyzeStep} from './dist/analyzer.js';
+const file=process.argv[2];
+if(!file) throw Error('Pass a STEP file path');
+const result=analyzeStep(readFileSync(file,'utf8'));
+const counts={}; for(const row of result.rows) counts[row.category]=(counts[row.category]||0)+1;
+const expected={'Flat sheet':91,'Bent sheet metal':15,'Tube':12,'Review':11};
+if(result.rows.length!==129||result.units!=='in'||Object.entries(expected).some(([key,value])=>counts[key]!==value)) throw Error(`Unexpected classification: ${JSON.stringify(counts)}`);
+const sample=result.rows.find(r=>r.name.includes('Round RD 1.0 X 0.095'));
+if(sample?.category!=='Tube'||Math.abs(sample.thickness-.095)>.001)throw Error('Known tube sample was not recognized');
+if(result.rows.some(r=>/weldnut/i.test(r.name)&&r.category!=='Review'))throw Error('Weldnut hardware should require review');
+console.log(`PASS: ${result.rows.length} bodies; ${JSON.stringify(counts)}; known tube and weldnuts checked.`);
