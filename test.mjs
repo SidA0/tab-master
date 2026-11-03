@@ -19,3 +19,6 @@ for(const part of parts){
   if((part.text.match(/MANIFOLD_SOLID_BREP/g)||[]).length!==1)throw Error(`Split body ${part.order} is not one solid`);
 }
 console.log(`PASS: ${result.rows.length} classified and independently split STEP solids; ${JSON.stringify(counts)}.`);
+const example=analyzeStep(readFileSync(new URL('./dist/sample/example-bent-tab.step',import.meta.url),'utf8'));
+if(example.rows.length!==1||example.rows[0].category!=='Bent sheet metal'||Math.abs(example.rows[0].thickness-.0625)>.0001)throw Error('Tutorial example classification changed');
+console.log('PASS: tutorial example is one 0.0625 in bent sheet tab.');

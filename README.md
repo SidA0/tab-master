@@ -2,6 +2,8 @@
 
 Browser-local STEP AP214 classifier for FSAE frame tabs. Import a multi-body STEP file, inspect and correct each body's classification and thickness, view each solid alone or in its original assembly position, then export body and grouped stock CSVs or a ZIP of independent STEP solids sorted by form and stock thickness. The source file stays on your device.
 
+The Tutorial page includes one bent seat-pan tab from the example STEP and an interactive 3D preview. The workspace can load that example directly, so the import, review, and export flow can be tried without another file.
+
 ## Local run
 
 Requires Node.js 20 or newer. Run `npm run dev` and open `http://127.0.0.1:4173/`. Import `27-BDY-CHA-Tabs.STEP` in the page. The 3D view can take several seconds to build after import.
