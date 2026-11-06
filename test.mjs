@@ -1,6 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {analyzeStep} from './dist/analyzer.js';
 import {splitStep} from './dist/splitter.js';
+import {extractFlatFaces,faceDxf} from './dist/flat-face.js';
 const file=process.argv[2];
 if(!file) throw Error('Pass a STEP file path');
 const result=analyzeStep(readFileSync(file,'utf8'));
@@ -22,3 +23,9 @@ console.log(`PASS: ${result.rows.length} classified and independently split STEP
 const example=analyzeStep(readFileSync(new URL('./dist/sample/example-bent-tab.step',import.meta.url),'utf8'));
 if(example.rows.length!==1||example.rows[0].category!=='Bent sheet metal'||Math.abs(example.rows[0].thickness-.0625)>.0001)throw Error('Tutorial example classification changed');
 console.log('PASS: tutorial example is one 0.0625 in bent sheet tab.');
+const faces=extractFlatFaces(readFileSync(file,'utf8'),result.rows);
+const missingFlat=result.rows.filter((row,i)=>row.category==='Flat sheet'&&!faces[i].selected);
+if(missingFlat.length)throw Error(`${missingFlat.length} flat sheet bodies have no closed planar face`);
+const first=faces[0].selected,dxf=faceDxf(first);
+if(first.holes!==1||(dxf.match(/LWPOLYLINE/g)||[]).length!==2||!dxf.includes('$INSUNITS\r\n70\r\n1'))throw Error('First tab DXF lost its hole or inch units');
+console.log('PASS: 91 flat sheet faces extracted; first tab DXF has a closed outline and hole in inches.');

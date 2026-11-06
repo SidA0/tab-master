@@ -1,6 +1,7 @@
 import {createCadViewer} from './viewer.js';
+import {faceDxf,faceSvg} from './flat-face.js';
 const $=id=>document.getElementById(id);
-let rows=[],parts=[],selected=null,filter='All',sourceName='',viewer=null,viewMode='solo';
+let rows=[],parts=[],flatFaces=new Map(),selected=null,filter='All',sourceName='',viewer=null,viewMode='solo';
 const categories=['Flat sheet','Bent sheet metal','Tube','Review'];
 const fmt=n=>Number.isFinite(n)?n.toFixed(4).replace(/0+$/,'').replace(/\.$/,''):'—';
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -21,12 +22,17 @@ function groupData(){
 }
 function renderGroups(){$('groupRows').innerHTML=groupData().map(g=>`<tr><td>${esc(g.category)}</td><td>${esc(g.thickness)}</td><td>${esc(g.outside)}</td><td>${g.ids.length}</td><td>${g.ids.join(', ')}</td></tr>`).join('');}
 function renderDetail(){
-  const r=rows.find(x=>x.index===selected);$('detail').hidden=!r;if(!r)return;
+  const r=rows.find(x=>x.index===selected);$('detail').hidden=!r;$('faceSection').hidden=!r;if(!r)return;
   $('detailIndex').textContent=`Body ${r.index} of ${rows.length}`;$('detailName').textContent=r.name;
   $('editCategory').value=r.category;$('editThickness').value=Number.isFinite(r.thickness)?r.thickness.toFixed(4):'';$('editOutside').value=Number.isFinite(r.outside)?r.outside.toFixed(4):'';$('editStatus').value=r.reviewStatus||'Unreviewed';
   $('detailEvidence').textContent=r.evidence;
   for(const [key,id] of [['planes','detailPlanes'],['cylinders','detailCylinders'],['tori','detailTori'],['faces','detailFaces']]) $(id).textContent=r[key];
   $('confidenceNote').textContent=r.confidence==='High'?'The form and thickness have analytic surface evidence. Verify the result in source CAD.':'The geometry or body identity needs manual review before using this item for purchasing.';
+  const face=flatFaces.get(r.id)?.selected;
+  $('facePreview').innerHTML=face?faceSvg(face):'<div class="face-empty">No closed planar face was found for this body.</div>';
+  $('faceInfo').textContent=face?`Largest planar face · ${face.area.toFixed(3)} in² · ${face.holes} internal cutout${face.holes===1?'':'s'} · ${face.width.toFixed(3)} × ${face.height.toFixed(3)} in`:'No 2D face DXF available';
+  $('faceWarning').textContent=r.category==='Flat sheet'?'Outline of the largest flat face. Compare with source CAD before cutting.':r.category==='Bent sheet metal'?'This is one face of a bent part, not an unfolded blank. Review in CAD before quoting.':r.category==='Tube'?'Tube cross sections are excluded from the flat-face ZIP. Use the tube STEP for fabrication.':'Classification needs review. Confirm this face represents the intended tab before quoting.';
+  $('downloadFace').disabled=!face||r.category==='Tube';
 }
 function showViewer(){
   const row=rows.find(r=>r.index===selected);if(!row||!viewer)return;
@@ -66,19 +72,42 @@ async function exportZip(){
   }catch(error){setStatus(`STEP ZIP failed: ${error.message}`,true);}
   finally{button.disabled=false;button.textContent='Download sorted STEP ZIP ↗';}
 }
+function faceFileName(row){return `${String(row.index).padStart(3,'0')}-${row.name.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,70)||'body'}-flat-face.dxf`;}
+function faceFolder(row){const base=folderFor(row);return row.category==='Flat sheet'?base:`Review-Required/${base}`;}
+async function exportFaceZip(){
+  if(!rows.length)return setStatus('Load a STEP file before exporting.',true);
+  const button=$('exportFaces');button.disabled=true;button.textContent='Preparing face DXFs…';
+  try{
+    const zip=new JSZip(),index=[],skipped=[];
+    for(const row of rows){const face=flatFaces.get(row.id)?.selected;
+      if(row.category==='Tube'||!face){skipped.push([row.index,row.name,row.category,row.category==='Tube'?'Tube profile is not a flat sheet blank':'No closed planar face found']);continue;}
+      const path=`${faceFolder(row)}/${faceFileName(row)}`;
+      zip.file(path,faceDxf(face));
+      index.push([row.index,row.name,row.category,Number.isFinite(row.thickness)?row.thickness.toFixed(4):'',face.faceId,face.area.toFixed(4),face.holes,path,row.category==='Flat sheet'?'Check cope and hole outline':'CAD REVIEW: largest face is not a complete flat pattern']);
+    }
+    zip.file('face-index.csv',[['body number','source name','category','stock thickness in','STEP face ID','face area sq in','internal cutouts','DXF path','review note'],...index].map(line=>line.map(csvCell).join(',')).join('\r\n'));
+    zip.file('not-exported.csv',[['body number','source name','category','reason'],...skipped].map(line=>line.map(csvCell).join(',')).join('\r\n'));
+    zip.file('README.txt',`${sourceName}\n${index.length} planar-face DXFs in inches. Each DXF contains only closed outlines from the largest planar face of a body, including internal cutouts. Curved STEP edges are sampled to within about 0.0005 in.\n\nFlat-Sheet folders are candidate laser-cut outlines. Review-Required contains faces from bent or unclassified bodies; these are individual faces, not unfolded blanks. Tube bodies are listed in not-exported.csv because an end face is not a sheet blank.\n\nCompare every DXF with source CAD and confirm material, thickness, dimensions, bend allowances, and intended cope before ordering.\n`);
+    if(!index.length)throw Error('No eligible planar faces found.');
+    setStatus(`Compressing ${index.length} planar-face DXFs…`);
+    downloadBlob(`${baseName()}-flat-faces-dxf.zip`,await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:3}}));
+    setStatus(`${index.length} planar-face DXFs downloaded; ${skipped.length} bodies listed as not exported.`);
+  }catch(error){setStatus(`Face DXF export failed: ${error.message}`,true);}
+  finally{button.disabled=false;button.textContent='Download flat-face DXF ZIP ↗';}
+}
 async function load(file){
   if(!file)return;if(!/\.(step|stp)$/i.test(file.name)){setStatus('Choose a .STEP or .STP file.',true);return;}if(file.size>100*1024*1024){setStatus('This file exceeds the 100 MB local limit.',true);return;}
   sourceName=file.name;$('fileName').textContent=`${file.name} · ${(file.size/1048576).toFixed(1)} MB`;$('heroSource').textContent=file.name;setStatus('Reading and classifying solid bodies…');
   try{const text=await file.text();const worker=new Worker('worker.js');const answer=await new Promise((resolve,reject)=>{worker.onmessage=e=>{if(e.data.phase==='meshing'){setStatus('Building 3D meshes and individual STEP bodies…');return;}resolve(e.data);};worker.onerror=e=>reject(Error(e.message||'Worker failed'));worker.postMessage(text);});worker.terminate();if(!answer.ok)throw Error(answer.error);
-    rows=answer.result.rows.map(r=>({...r,reviewStatus:'Unreviewed'}));parts=answer.parts;selected=rows[0]?.index||null;viewMode='solo';filter='All';$('search').value='';document.querySelectorAll('.filters .chip').forEach(b=>b.classList.toggle('active',b.dataset.filter==='All'));$('results').hidden=false;$('groups').hidden=false;render();viewer ||= createCadViewer($('cadViewer'));viewer.setData(answer.meshes,answer.meshParts);showViewer();setStatus(`${rows.length} solid ${rows.length===1?'body':'bodies'} found. Inspect geometry, correct stock, then download the sorted STEP ZIP.`);$('results').scrollIntoView({behavior:'smooth',block:'start'});
-  }catch(error){rows=[];parts=[];selected=null;$('results').hidden=true;$('groups').hidden=true;$('detail').hidden=true;render();setStatus(`Analysis failed: ${error.message}`,true);}
+    rows=answer.result.rows.map(r=>({...r,reviewStatus:'Unreviewed'}));parts=answer.parts;flatFaces=new Map(answer.flatFaces.map(f=>[f.solidId,f]));selected=rows[0]?.index||null;viewMode='solo';filter='All';$('search').value='';document.querySelectorAll('.filters .chip').forEach(b=>b.classList.toggle('active',b.dataset.filter==='All'));$('results').hidden=false;$('groups').hidden=false;render();viewer ||= createCadViewer($('cadViewer'));viewer.setData(answer.meshes,answer.meshParts);showViewer();setStatus(`${rows.length} solid ${rows.length===1?'body':'bodies'} found. Inspect geometry, correct stock, then download a STEP or flat-face DXF ZIP.`);$('results').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(error){rows=[];parts=[];flatFaces=new Map();selected=null;$('results').hidden=true;$('groups').hidden=true;$('detail').hidden=true;render();setStatus(`Analysis failed: ${error.message}`,true);}
 }
 $('file').addEventListener('change',e=>load(e.target.files[0]));
 async function loadExample(){try{setStatus('Loading the example bent tab…');const response=await fetch('sample/example-bent-tab.step');if(!response.ok)throw Error('Example STEP file is unavailable.');const blob=await response.blob();await load(new File([blob],'example-bent-tab.step',{type:'application/step'}));}catch(error){setStatus(`Example failed: ${error.message}`,true);}}
 $('loadExample').addEventListener('click',loadExample);
 if(new URLSearchParams(location.search).get('example')==='1')loadExample();
 const drop=$('dropzone');for(const event of ['dragenter','dragover'])drop.addEventListener(event,e=>{e.preventDefault();drop.classList.add('drag')});for(const event of ['dragleave','drop'])drop.addEventListener(event,e=>{e.preventDefault();drop.classList.remove('drag')});drop.addEventListener('drop',e=>load(e.dataTransfer.files[0]));
-$('reset').addEventListener('click',()=>{rows=[];parts=[];selected=null;sourceName='';viewer?.clear();$('file').value='';$('fileName').textContent='STEP / STP · up to 100 MB · stays on this device';$('heroSource').textContent='Choose a STEP file to begin.';$('results').hidden=true;$('groups').hidden=true;$('detail').hidden=true;setStatus('');render();window.scrollTo({top:0,behavior:'smooth'});});
+$('reset').addEventListener('click',()=>{rows=[];parts=[];flatFaces=new Map();selected=null;sourceName='';viewer?.clear();$('file').value='';$('fileName').textContent='STEP / STP · up to 100 MB · stays on this device';$('heroSource').textContent='Choose a STEP file to begin.';$('results').hidden=true;$('groups').hidden=true;$('detail').hidden=true;setStatus('');render();window.scrollTo({top:0,behavior:'smooth'});});
 document.querySelectorAll('.filters .chip').forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.filter;document.querySelectorAll('.filters .chip').forEach(b=>b.classList.toggle('active',b===button));renderRows();}));
 $('search').addEventListener('input',renderRows);
 $('bodyRows').addEventListener('click',e=>{const button=e.target.closest('[data-select]');if(!button)return;selected=+button.dataset.select;viewMode=rows.find(r=>r.index===selected)?.category==='Review'?'assembly':'solo';renderRows();renderDetail();showViewer();$('detail').scrollIntoView({behavior:'smooth',block:'start'});});
@@ -86,6 +115,8 @@ for(const [id,key] of [['editCategory','category'],['editThickness','thickness']
 $('exportBodies').addEventListener('click',()=>download(`${baseName()}-body-inventory.csv`,['body number','source body name','category','thickness in','outside diameter in','confidence','review status','detection evidence','face count'],rows.map(r=>[r.index,r.name,r.category,Number.isFinite(r.thickness)?r.thickness.toFixed(4):'',Number.isFinite(r.outside)?r.outside.toFixed(4):'',r.confidence,r.reviewStatus,r.evidence,r.faces])));
 $('exportGroups').addEventListener('click',()=>download(`${baseName()}-stock-groups.csv`,['category','thickness in','outside diameter in','body count','body numbers'],groupData().map(g=>[g.category,g.thickness,g.outside,g.ids.length,g.ids.join('; ')])));
 $('exportZip').addEventListener('click',exportZip);
+$('exportFaces').addEventListener('click',exportFaceZip);
+$('downloadFace').addEventListener('click',()=>{const row=rows.find(r=>r.index===selected),face=flatFaces.get(row?.id)?.selected;if(row&&face&&row.category!=='Tube')downloadBlob(faceFileName(row),new Blob([faceDxf(face)],{type:'application/dxf'}));});
 $('viewSolo').addEventListener('click',()=>{viewMode='solo';showViewer();});
 $('viewAssembly').addEventListener('click',()=>{viewMode='assembly';showViewer();});
 $('viewFit').addEventListener('click',()=>viewer?.fit());

@@ -3,9 +3,10 @@ let cadModule;
 self.onmessage=async event=>{
   try {
     const source=event.data;
-    const [{analyzeStep},{splitStep}]=await Promise.all([import('./analyzer.js'),import('./splitter.js')]);
+    const [{analyzeStep},{splitStep},{extractFlatFaces}]=await Promise.all([import('./analyzer.js'),import('./splitter.js'),import('./flat-face.js')]);
     const result=analyzeStep(source);
     const parts=splitStep(source,result.rows.length);
+    const flatFaces=extractFlatFaces(source,result.rows);
     if(parts.some(p=>!result.rows.some(r=>r.id===p.solidId)))throw Error('Split body IDs do not match classification IDs.');
     self.postMessage({phase:'meshing'});
     cadModule ||= await occtimportjs({locateFile:name=>`vendor/${name}`});
@@ -22,6 +23,6 @@ self.onmessage=async event=>{
       node.meshes.forEach((meshIndex,i)=>{meshParts[meshIndex]={solidId:list[i].solidId,name:list[i].name};});
     }
     if(meshParts.some(p=>!p))throw Error('Some CAD meshes could not be matched to STEP solids.');
-    self.postMessage({ok:true,result,parts,meshParts,meshes:cad.meshes});
+    self.postMessage({ok:true,result,parts,flatFaces,meshParts,meshes:cad.meshes});
   } catch(error) { self.postMessage({ok:false,error:String(error?.message||error)}); }
 };
