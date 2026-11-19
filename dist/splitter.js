@@ -16,7 +16,9 @@ export function splitStep(source,expectedCount){
     const direct=[...entities].filter(([,v])=>/^SHAPE_DEFINITION_REPRESENTATION\b/.test(v)&&new RegExp(`#${repId}(?!\d)`).test(v)).map(([id])=>id);
     const relations=[...entities].filter(([,v])=>/^SHAPE_REPRESENTATION_RELATIONSHIP\b/.test(v)&&new RegExp(`#${repId}(?!\d)`).test(v));
     const baseIds=relations.flatMap(([,v])=>refs(v).filter(id=>id!==repId));
-    const group=entities.get(baseIds[0])?.match(/^SHAPE_REPRESENTATION\s*\(\s*'((?:''|[^'])*)'/)?.[1]?.replace(/''/g,"'")||`Representation ${repId}`;
+    const group=entities.get(baseIds[0])?.match(/^SHAPE_REPRESENTATION\s*\(\s*'((?:''|[^'])*)'/)?.[1]?.replace(/''/g,"'")
+      ||rep.match(/^ADVANCED_BREP_SHAPE_REPRESENTATION\s*\(\s*'((?:''|[^'])*)'/)?.[1]?.replace(/''/g,"'")
+      ||`Representation ${repId}`;
     const linked=[...entities].filter(([,v])=>/^SHAPE_DEFINITION_REPRESENTATION\b/.test(v)&&baseIds.some(id=>new RegExp(`#${id}(?!\d)`).test(v))).map(([id])=>id);
     const roots=[...direct,...linked,...relations.map(([id])=>id)];
     if(!roots.length)throw Error(`No product-to-shape link for representation #${repId}.`);

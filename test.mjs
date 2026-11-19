@@ -29,3 +29,12 @@ if(missingFlat.length)throw Error(`${missingFlat.length} flat sheet bodies have 
 const first=faces[0].selected,dxf=faceDxf(first);
 if(first.holes!==1||(dxf.match(/LWPOLYLINE/g)||[]).length!==2||!dxf.includes('$INSUNITS\r\n70\r\n1'))throw Error('First tab DXF lost its hole or inch units');
 console.log('PASS: 91 flat sheet faces extracted; first tab DXF has a closed outline and hole in inches.');
+const directLinkFile=process.argv[3];
+if(directLinkFile){
+  const directSource=readFileSync(directLinkFile,'utf8');
+  const directResult=analyzeStep(directSource),directParts=splitStep(directSource,directResult.rows.length);
+  if(directParts.length!==68||directParts.some(part=>part.group!=='27-BDY-CHA-TAB-DYN'))throw Error('Direct-linked CAD group does not match its 68 STEP solids');
+  const directFaces=extractFlatFaces(directSource,directResult.rows);
+  if(directResult.rows.filter(row=>row.category==='Flat sheet').length!==64||directFaces.filter((face,i)=>directResult.rows[i].category==='Flat sheet'&&face.selected).length!==64)throw Error('Direct-linked flat-sheet export changed');
+  console.log('PASS: directly linked CAD group maps 68 STEP solids and 64 flat-face DXFs.');
+}
