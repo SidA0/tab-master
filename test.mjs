@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs';
 import {analyzeStep} from './dist/analyzer.js';
 import {splitStep} from './dist/splitter.js';
 import {extractFlatFaces,faceDxf} from './dist/flat-face.js';
+import {detectPartType} from './dist/part-type.js';
 const file=process.argv[2];
 if(!file) throw Error('Pass a STEP file path');
 const result=analyzeStep(readFileSync(file,'utf8'));
@@ -29,6 +30,9 @@ if(missingFlat.length)throw Error(`${missingFlat.length} flat sheet bodies have 
 const first=faces[0].selected,dxf=faceDxf(first);
 if(first.holes!==1||(dxf.match(/LWPOLYLINE/g)||[]).length!==2||!dxf.includes('$INSUNITS\r\n70\r\n1'))throw Error('First tab DXF lost its hole or inch units');
 console.log('PASS: 91 flat sheet faces extracted; first tab DXF has a closed outline and hole in inches.');
+const partTypes=result.rows.map((row,i)=>detectPartType(row,faces[i].selected));
+if(partTypes.filter(type=>type==='Tab').length!==90||partTypes.filter(type=>type==='Gusset / stringer').length!==16||partTypes.filter(type=>type==='Review').length!==23)throw Error('Tab and gusset/stringer detection changed');
+console.log('PASS: hole-based part type detection labels tabs, gusset/stringer candidates, and review bodies.');
 const directLinkFile=process.argv[3];
 if(directLinkFile){
   const directSource=readFileSync(directLinkFile,'utf8');
@@ -36,5 +40,7 @@ if(directLinkFile){
   if(directParts.length!==68||directParts.some(part=>part.group!=='27-BDY-CHA-TAB-DYN'))throw Error('Direct-linked CAD group does not match its 68 STEP solids');
   const directFaces=extractFlatFaces(directSource,directResult.rows);
   if(directResult.rows.filter(row=>row.category==='Flat sheet').length!==64||directFaces.filter((face,i)=>directResult.rows[i].category==='Flat sheet'&&face.selected).length!==64)throw Error('Direct-linked flat-sheet export changed');
+  const directTypes=directResult.rows.map((row,i)=>detectPartType(row,directFaces[i].selected));
+  if(directTypes.filter(type=>type==='Tab').length!==44||directTypes.filter(type=>type==='Gusset / stringer').length!==20||directTypes.filter(type=>type==='Review').length!==4)throw Error('Direct-linked part type detection changed');
   console.log('PASS: directly linked CAD group maps 68 STEP solids and 64 flat-face DXFs.');
 }
