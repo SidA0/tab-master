@@ -31,9 +31,10 @@ function renderDetail(){
   for(const [key,id] of [['planes','detailPlanes'],['cylinders','detailCylinders'],['tori','detailTori'],['faces','detailFaces']]) $(id).textContent=r[key];
   $('confidenceNote').textContent=r.confidence==='High'?'The form and thickness have analytic surface evidence. Verify the result in source CAD.':'The geometry or body identity needs manual review before using this item for purchasing.';
   const face=flatFaces.get(r.id)?.selected;
+  const faceMatch=flatFaces.get(r.id);
   $('facePreview').innerHTML=face?faceSvg(face):'<div class="face-empty">No closed planar face was found for this body.</div>';
-  $('faceInfo').textContent=face?`Largest planar face · ${face.area.toFixed(3)} in² · ${face.holes} internal cutout${face.holes===1?'':'s'} · ${face.width.toFixed(3)} × ${face.height.toFixed(3)} in`:'No 2D face DXF available';
-  $('faceWarning').textContent=r.category==='Flat sheet'?'Outline of the largest flat face. Compare with source CAD before cutting.':r.category==='Bent sheet metal'?'This is one face of a bent part, not an unfolded blank. Review in CAD before quoting.':r.category==='Tube'?'Tube cross sections are excluded from the flat-face ZIP. Use the tube STEP for fabrication.':'Classification needs review. Confirm this face represents the intended tab before quoting.';
+  $('faceInfo').textContent=face?`${faceMatch?.representative?'Representative broad face':'Largest planar face · review'} · ${face.area.toFixed(3)} in² · ${face.holes} internal cutout${face.holes===1?'':'s'} · ${face.width.toFixed(3)} × ${face.height.toFixed(3)} in`:'No 2D face DXF available';
+  $('faceWarning').textContent=r.category==='Flat sheet'&&!faceMatch?.representative?'No matching broad face pair was found. This largest face is a review candidate; confirm its outline in CAD before cutting.':r.category==='Flat sheet'?'Largest face of the strongest opposing broad-face pair. Compare with source CAD before cutting.':r.category==='Bent sheet metal'?'This is one face of a bent part, not an unfolded blank. Review in CAD before quoting.':r.category==='Tube'?'Tube cross sections are excluded from the flat-face ZIP. Use the tube STEP for fabrication.':'Classification needs review. Confirm this face represents the intended tab before quoting.';
   $('downloadFace').disabled=!face||r.category==='Tube';
 }
 function showViewer(){
@@ -75,21 +76,21 @@ async function exportZip(){
   finally{button.disabled=false;button.textContent='Download sorted STEP ZIP ↗';}
 }
 function faceFileName(row){return `${String(row.index).padStart(3,'0')}-${row.name.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,70)||'body'}-flat-face.dxf`;}
-function faceFolder(row){const base=folderFor(row);return row.category==='Flat sheet'?base:`Review-Required/${base}`;}
+function faceFolder(row,faceMatch){const base=folderFor(row);return row.category==='Flat sheet'&&faceMatch?.representative?base:`Review-Required/${base}`;}
 async function exportFaceZip(){
   if(!rows.length)return setStatus('Load a STEP file before exporting.',true);
   const button=$('exportFaces');button.disabled=true;button.textContent='Preparing face DXFs…';
   try{
     const zip=new JSZip(),index=[],skipped=[];
-    for(const row of rows){const face=flatFaces.get(row.id)?.selected;
+    for(const row of rows){const faceMatch=flatFaces.get(row.id),face=faceMatch?.selected;
       if(row.category==='Tube'||!face){skipped.push([row.index,row.name,row.category,row.category==='Tube'?'Tube profile is not a flat sheet blank':'No closed planar face found']);continue;}
-      const path=`${faceFolder(row)}/${faceFileName(row)}`;
+      const path=`${faceFolder(row,faceMatch)}/${faceFileName(row)}`;
       zip.file(path,faceDxf(face));
-      index.push([row.index,row.name,row.category,row.partType,Number.isFinite(row.thickness)?row.thickness.toFixed(4):'',face.faceId,face.area.toFixed(4),face.holes,path,row.category==='Flat sheet'?'Check outline and part type':'CAD REVIEW: largest face is not a complete flat pattern']);
+      index.push([row.index,row.name,row.category,row.partType,Number.isFinite(row.thickness)?row.thickness.toFixed(4):'',face.faceId,faceMatch.representative?'paired broad faces':'largest planar face; review',faceMatch.oppositeFaceId||'',face.area.toFixed(4),face.holes,path,row.category==='Flat sheet'&&faceMatch.representative?'Check outline and part type':'CAD REVIEW: face may not represent a complete flat blank']);
     }
-    zip.file('face-index.csv',[['body number','source name','category','part type','stock thickness in','STEP face ID','face area sq in','internal cutouts','DXF path','review note'],...index].map(line=>line.map(csvCell).join(',')).join('\r\n'));
+    zip.file('face-index.csv',[['body number','source name','category','part type','stock thickness in','STEP face ID','selection basis','opposite STEP face ID','face area sq in','internal cutouts','DXF path','review note'],...index].map(line=>line.map(csvCell).join(',')).join('\r\n'));
     zip.file('not-exported.csv',[['body number','source name','category','reason'],...skipped].map(line=>line.map(csvCell).join(',')).join('\r\n'));
-    zip.file('README.txt',`${sourceName}\n${index.length} planar-face DXFs in inches. Each DXF contains only closed outlines from the largest planar face of a body, including internal cutouts. Curved STEP edges are sampled to within about 0.0005 in.\n\nThe face-index.csv records part type: an internal cutout suggests a tab, while no cutout suggests a gusset or stringer. This guess can be manually corrected in the workspace. Flat-Sheet folders are candidate laser-cut outlines. Review-Required contains faces from bent or unclassified bodies; these are individual faces, not unfolded blanks. Tube bodies are listed in not-exported.csv because an end face is not a sheet blank.\n\nCompare every DXF with source CAD and confirm material, thickness, dimensions, bend allowances, and intended cope before ordering.\n`);
+    zip.file('README.txt',`${sourceName}\n${index.length} planar-face DXFs in inches. Each DXF contains only closed outlines from the selected planar face of a body, including internal cutouts. Curved STEP edges are sampled to within about 0.0005 in.\n\nFor sheet bodies, the chosen face is the larger side of the strongest parallel broad-face pair. If no such pair is found, the largest planar face is exported to Review-Required and marked for CAD review in face-index.csv. The index also records part type: an internal cutout suggests a tab, while no cutout suggests a gusset or stringer. This guess can be manually corrected in the workspace. Flat-Sheet folders are candidate laser-cut outlines. Review-Required also contains faces from bent or unclassified bodies; these are individual faces, not unfolded blanks. Tube bodies are listed in not-exported.csv because an end face is not a sheet blank.\n\nCompare every DXF with source CAD and confirm material, thickness, dimensions, bend allowances, and intended cope before ordering.\n`);
     if(!index.length)throw Error('No eligible planar faces found.');
     setStatus(`Compressing ${index.length} planar-face DXFs…`);
     downloadBlob(`${baseName()}-flat-faces-dxf.zip`,await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:3}}));

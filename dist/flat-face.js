@@ -88,7 +88,24 @@ function faceOutline(entities,reader,faceId,scale){
   const surfaceArea=outer.area-holes.reduce((sum,l)=>sum+l.area,0);
   if(surfaceArea<=0)throw Error('Planar face holes exceed outer outline');
   const all=loops.flatMap(l=>l.points),xs=all.map(p=>p[0]),ys=all.map(p=>p[1]);
-  return {faceId,area:surfaceArea,width:Math.max(...xs)-Math.min(...xs),height:Math.max(...ys)-Math.min(...ys),loops:[outer,...holes].map(l=>l.points),holes:holes.length,pointCount:all.length};
+  return {faceId,area:surfaceArea,width:Math.max(...xs)-Math.min(...xs),height:Math.max(...ys)-Math.min(...ys),loops:[outer,...holes].map(l=>l.points),holes:holes.length,pointCount:all.length,normal:basis.z,planePoint:basis.point.map(v=>v*scale)};
+}
+
+// Opposite broad faces establish the sheet's usable outline. A side wall can
+// also be planar, so rank face pairs by their shared area before picking the
+// larger face of the best pair. Keep the largest face as a review fallback.
+export function chooseRepresentativeFace(candidates){
+  const ranked=[...candidates].sort((a,b)=>b.area-a.area);
+  let best=null;
+  for(let i=0;i<ranked.length;i++)for(let j=i+1;j<ranked.length;j++){
+    const a=ranked[i],b=ranked[j];
+    if(Math.abs(dot(a.normal,b.normal))<.9995)continue;
+    const gap=Math.abs(dot(minus(a.planePoint,b.planePoint),a.normal));
+    if(gap<.015||gap>.3||b.area/a.area<.5)continue;
+    const score=b.area;
+    if(!best||score>best.score)best={selected:a,opposite:b,score,gap};
+  }
+  return best?{selected:best.selected,oppositeFaceId:best.opposite.faceId,faceSeparation:best.gap,representative:true}:{selected:ranked[0]||null,oppositeFaceId:null,faceSeparation:null,representative:false};
 }
 
 export function extractFlatFaces(source,rows){
@@ -100,8 +117,8 @@ export function extractFlatFaces(source,rows){
       if(shape(entities.get(refs(entities.get(id)).at(-1))||'')!=='PLANE')continue;
       try{const outline=faceOutline(entities,reader,id,scale);if(outline)candidates.push(outline);}catch(error){errors.push(error.message);}
     }
-    candidates.sort((a,b)=>b.area-a.area);
-    return {solidId:row.id,selected:candidates[0]||null,candidateCount:candidates.length,errors:[...new Set(errors)].slice(0,3)};
+    const choice=chooseRepresentativeFace(candidates);
+    return {solidId:row.id,...choice,candidateCount:candidates.length,errors:[...new Set(errors)].slice(0,3)};
   });
 }
 
@@ -118,5 +135,5 @@ export function faceSvg(face){
   const all=face.loops.flat(),minX=Math.min(...all.map(p=>p[0])),minY=Math.min(...all.map(p=>p[1])),maxX=Math.max(...all.map(p=>p[0])),maxY=Math.max(...all.map(p=>p[1]));
   const w=Math.max(maxX-minX,.01),h=Math.max(maxY-minY,.01),pad=Math.max(w,h)*.06;
   const paths=face.loops.map(loop=>`M ${loop.map(p=>`${(p[0]-minX).toFixed(4)} ${(maxY-p[1]).toFixed(4)}`).join(' L ')} Z`).join(' ');
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-pad} ${-pad} ${w+2*pad} ${h+2*pad}" role="img" aria-label="Largest planar face outline"><path d="${paths}" fill="#dbe9f1" fill-rule="evenodd" stroke="#24455f" stroke-width="${Math.max(w,h)*.004}" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-pad} ${-pad} ${w+2*pad} ${h+2*pad}" role="img" aria-label="Selected planar face outline"><path d="${paths}" fill="#dbe9f1" fill-rule="evenodd" stroke="#24455f" stroke-width="${Math.max(w,h)*.004}" vector-effect="non-scaling-stroke"/></svg>`;
 }
